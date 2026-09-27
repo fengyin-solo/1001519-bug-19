@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Dashboard from '@/views/Dashboard.vue'
 const Station = () => import('@/views/station/index.vue')
 const Sensor = () => import('@/views/sensor/index.vue')
+const SensorDetail = () => import('@/views/sensor/detail.vue')
 const Observation = () => import('@/views/observation/index.vue')
 const Quality = () => import('@/views/quality/index.vue')
 const Calibration = () => import('@/views/calibration/index.vue')
@@ -26,6 +27,7 @@ const router = createRouter({
     { path: '/', name: 'dashboard', component: Dashboard },
     { path: '/station', name: 'station', component: Station },
     { path: '/sensor', name: 'sensor', component: Sensor },
+    { path: '/sensor/:id(\\d+)', name: 'sensor-detail', component: SensorDetail },
     { path: '/observation', name: 'observation', component: Observation },
     { path: '/quality', name: 'quality', component: Quality },
     { path: '/calibration', name: 'calibration', component: Calibration },

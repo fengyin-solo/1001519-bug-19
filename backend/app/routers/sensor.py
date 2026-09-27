@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.sensor import SensorService
+from app.services.sensor import STAT_LABELS, SensorService
 
 router = APIRouter(prefix="/api/sensor", tags=["观测传感器"])
 
@@ -20,14 +20,42 @@ STATUSES = ["待检定", "正常采集", "疑误待查", "已拆除"]
 def list_entries(
     keyword: str | None = Query(default=None, description="按传感器编号检索"),
     status: str | None = Query(default=None, description="待检定、正常采集、疑误待查、已拆除"),
+    missing_validity: bool = Query(default=False, description="只看检定有效期缺失的记录"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按传感器编号与状态过滤观测传感器列表；没有数据时返回空页，不报错。"""
+    """按传感器编号、状态与检定有效期缺失过滤；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    items, total = service.list_entries(
+        keyword=keyword,
+        status=status,
+        missing_validity=missing_validity,
+        page=page,
+        size=size,
+    )
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats")
+def stats() -> dict[str, Any]:
+    """采集统计卡：在装、正常采集、待检定、疑误待查、已拆除、检定有效期缺失。
+
+    已拆除传感器不计入在装与采集口径，保证列表、统计卡、导出清单三处一致。
+    """
+    counts = service.stats()
+    return {"items": [{"key": key, "label": label, "value": counts[key]} for key, label in STAT_LABELS]}
+
+
+# 注意：/export 必须声明在 /{entry_id} 之前，否则「export」会被当成 entry_id 拦截报 422。
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按传感器编号检索"),
+    status: str | None = Query(default=None, description="待检定、正常采集、疑误待查、已拆除"),
+    missing_validity: bool = Query(default=False, description="只看检定有效期缺失的记录"),
+) -> dict[str, Any]:
+    """导出观测传感器清单：过滤口径与列表完全一致，并随附统计卡数据。"""
+    return service.export_entries(keyword=keyword, status=status, missing_validity=missing_validity)
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -50,16 +78,14 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条观测传感器执行安排检定、标记疑误、拆除传感器；不允许的动作会被拦下并说明原因。"""
+    """对单条观测传感器执行安排检定、标记疑误、拆除传感器。
+
+    状态机拦截非法流转；重复执行同一个动作不会产生第二条状态变化。
+    """
     action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    if not action:
+        return ActionResult(ok=False, message="缺少动作名称，请明确要执行安排检定、标记疑误还是拆除传感器")
+    entry, message, changed = service.run_action(entry_id, action)
     if entry is None:
-        return ActionResult(ok=False, message=message)
-    return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出观测传感器清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "sensor", "total": total, "items": items}
+        return ActionResult(ok=False, message=message, changed=False)
+    return ActionResult(ok=True, message=message, entry=entry, changed=changed)
